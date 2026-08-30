@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Diophantine Review Workbench</title>
+  <meta name="description" content="A local, human-centered review cockpit for Diophantine equation families.">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: light-dark(#eef1f5, #0d1014);
+      --surface: light-dark(#ffffff, #171b20);
+      --surface-2: light-dark(#f6f7f9, #1d2229);
+      --surface-3: light-dark(#eceff3, #252b33);
+      --text: light-dark(#19212b, #edf2f7);
+      --muted: light-dark(#687483, #9da8b5);
+      --border: light-dark(#d8dde4, #333b45);
+      --blue: light-dark(#315f9f, #8ab4f8);
+      --blue-soft: light-dark(#e8f0fc, #1b2c46);
+      --green: light-dark(#25724a, #76d59a);
+      --green-soft: light-dark(#e8f5ed, #183528);
+      --amber: light-dark(#9a650c, #efbd67);
+      --amber-soft: light-dark(#fff4da, #3b2c14);
+      --red: light-dark(#a64242, #f08b8b);
+      --red-soft: light-dark(#fdecec, #3d2022);
+      --shadow: 0 18px 50px light-dark(rgba(21, 29, 38, .12), rgba(0, 0, 0, .35));
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--bg); color: var(--text); }
+    button, select, textarea, input { font: inherit; }
+    button, select, textarea, input { color: var(--text); }
+    button { cursor: pointer; }
+    a { color: var(--blue); }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--blue);
+      color: light-dark(#fff, #0c121b);
+      font-weight: 700;
+    }
+    .brand-title { font-weight: 650; }
+    .brand-subtitle { color: var(--muted); font-size: 12px; margin-top: 1px; }
+
+    .control-group { display: flex; align-items: center; gap: 7px; }
+    .control-label { color: var(--muted); font-size: 13px; }
+    select, .input, textarea {
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      border-radius: 7px;
+      padding: 7px 9px;
+    }
+    .family-filter { width: 155px; }
+    select:focus, .input:focus, textarea:focus, button:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    .button {
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      border-radius: 7px;
+      padding: 7px 10px;
+    }
+    .button:hover { background: var(--surface-3); }
+    .button.primary { background: var(--blue); border-color: var(--blue); color: light-dark(#fff, #101722); }
+    .button.ghost { background: transparent; }
+    .button.small { padding: 5px 8px; font-size: 12px; }
+
+    .human-status { display: inline-flex; align-items: center; gap: 7px; color: var(--amber); font-size: 13px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+    .focusbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      overflow-x: auto;
+      padding: 8px 16px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .focus-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .focus-button {
+      border: 0;
+      background: transparent;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .focus-button[aria-pressed="true"] { color: var(--blue); background: var(--blue-soft); }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(240px, .88fr) minmax(320px, 1.18fr) minmax(275px, 1fr);
+      gap: 1px;
+      background: var(--border);
+    }
+
+    .pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+    .pane-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .pane-title { font-weight: 650; }
+    .pane-meta { color: var(--muted); font-size: 12px; }
+    .pane-body { min-height: 0; overflow: auto; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .summary-item { padding: 8px; background: var(--surface-2); border-radius: 7px; }
+    .summary-key { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+    .summary-value { display: block; margin-top: 4px; font-size: 13px; }
+
+    .section-label { padding: 10px 11px 5px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .source-list, .file-list { display: grid; gap: 4px; padding: 0 8px 8px; }
+    .source-item, .file-item {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      border-radius: 7px;
+      padding: 8px;
+    }
+    .source-item:hover, .file-item:hover { background: var(--surface-2); }
+    .source-item[aria-pressed="true"], .file-item[aria-pressed="true"] { background: var(--blue-soft); }
+    .item-title { display: block; font-size: 13px; }
+    .item-meta { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
+    .source-kind { display: inline-block; margin-right: 5px; color: var(--blue); }
+
+    .source-preview { margin: 0 10px 10px; padding: 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+    .source-preview h3 { margin: 0 0 6px; font-size: 14px; }
+    .source-preview p { margin: 6px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .source-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .preview-launch {
+      position: relative;
+      width: 100%;
+      margin-bottom: 11px;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      text-align: left;
+    }
+    .preview-launch:hover { border-color: var(--blue); }
+    .preview-launch::after {
+      content: 'Click to enlarge';
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      color: #fff;
+      background: rgba(15, 24, 36, .82);
+      font-size: 11px;
+      pointer-events: none;
+    }
+    .pdf-thumbnail-frame {
+      display: block;
+      width: 100%;
+      height: 225px;
+      border: 0;
+      background: #dfe3e8;
+      pointer-events: none;
+    }
+    .wiki-thumbnail-card { display: grid; grid-template-columns: 130px 1fr; gap: 14px; min-height: 172px; padding: 13px; }
+    .wiki-thumbnail-card .source-thumbnail,
+    .wiki-thumbnail-card .source-placeholder { width: 130px; height: 146px; aspect-ratio: auto; }
+    .source-visual { display: grid; grid-template-columns: 92px 1fr; gap: 11px; align-items: start; }
+    .source-thumbnail {
+      width: 92px;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--surface-3);
+    }
+    .source-placeholder {
+      width: 92px;
+      aspect-ratio: 4 / 3;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      color: var(--blue);
+      background: var(--blue-soft);
+      border: 1px solid var(--border);
+      font-size: 24px;
+      font-weight: 650;
+    }
+    .preview-kicker { color: var(--blue); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+    .preview-description { color: var(--text) !important; }
+    .preview-loading { min-height: 110px; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+
+    .source-dialog {
+      width: min(1100px, calc(100vw - 30px));
+      max-width: none;
+      height: min(88vh, 880px);
+      padding: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .source-dialog::backdrop { background: rgba(7, 11, 16, .7); backdrop-filter: blur(2px); }
+    .dialog-shell { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    .dialog-header { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
+    .dialog-title { min-width: 0; margin-right: auto; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dialog-body { min-height: 0; overflow: auto; background: var(--surface-2); }
+    .pdf-dialog-frame { width: 100%; height: 100%; min-height: 650px; border: 0; background: #dfe3e8; }
+    .wiki-dialog-content { max-width: 820px; margin: 28px auto; padding: 28px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+    .wiki-dialog-content img { float: right; width: min(38%, 280px); max-height: 330px; margin: 0 0 18px 24px; object-fit: cover; border-radius: 8px; }
+    .wiki-dialog-content h2 { margin: 0 0 5px; font-size: 25px; }
+    .wiki-dialog-content p { line-height: 1.65; }
+    .wiki-dialog-description { color: var(--muted); }
+
+    .editor-tabs { display: flex; gap: 2px; overflow-x: auto; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+    .editor-tab { border: 0; background: transparent; color: var(--muted); border-radius: 6px; padding: 6px 8px; white-space: nowrap; }
+    .editor-tab[aria-selected="true"] { color: var(--blue); background: var(--blue-soft); }
+    .editor-path { padding: 7px 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+    .code-jumps { display: flex; align-items: center; gap: 5px; min-height: 37px; padding: 6px 9px; overflow-x: auto; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .code-jumps-label { color: var(--muted); font-size: 11px; white-space: nowrap; margin-right: 2px; }
+    pre { margin: 0; }
+    .code-view {
+      min-height: 325px;
+      padding: 11px;
+      overflow: auto;
+      color: var(--text);
+      background: light-dark(#f8f9fb, #101419);
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: normal;
+      tab-size: 2;
+    }
+    .code-line { display: block; min-width: max-content; white-space: pre; border-left: 2px solid transparent; }
+    .code-line.is-hit { background: var(--amber-soft); border-left-color: var(--amber); }
+    .line-number { display: inline-block; width: 48px; padding-right: 10px; color: var(--muted); text-align: right; user-select: none; }
+    .line-content { padding-right: 18px; }
+    .tracebar { padding: 9px 11px; border-top: 1px solid var(--border); background: var(--surface-2); color: var(--blue); font-size: 12px; }
+
+    .terminal-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    .terminal {
+      min-height: 265px;
+      padding: 11px;
+      overflow: auto;
+      background: light-dark(#202731, #080b0e);
+      color: #dbe5ef;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+    .terminal .prompt { color: #8ab4f8; }
+    .terminal .ok { color: #79d59c; }
+    .terminal .warn { color: #efbd67; }
+    .terminal .error { color: #f08b8b; }
+    .terminal .dim { color: #8995a3; }
+    .security-note { padding: 7px 10px; color: var(--amber); background: var(--amber-soft); border-bottom: 1px solid var(--border); font-size: 11px; line-height: 1.45; }
+    .sage-input-wrap { padding: 9px 10px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+    .sage-input-label { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+    .sage-input-row { display: flex; gap: 6px; align-items: stretch; }
+    .sage-prompt {
+      display: flex;
+      align-items: center;
+      color: var(--blue);
+      font: 12px ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    .sage-input {
+      flex: 1;
+      min-width: 0;
+      min-height: 58px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px;
+      color: var(--text);
+      background: var(--surface);
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    .sage-input-actions { display: flex; flex-direction: column; gap: 5px; }
+    .history-actions { display: flex; gap: 4px; }
+
+    .checklist { display: grid; gap: 7px; padding: 10px; }
+    .check-row { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 12px; }
+    .check-row input { margin-top: 2px; }
+
+    .review-dock {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .dock-header { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); }
+    .dock-title { font-weight: 650; }
+    .dock-caption { color: var(--muted); font-size: 12px; margin-right: auto; }
+    .notes-panel { background: var(--surface); padding: 10px 12px; }
+    .notes-panel textarea { width: 100%; min-height: 74px; resize: vertical; }
+    .saved { color: var(--green); font-size: 11px; margin-top: 5px; min-height: 16px; }
+
+    .prototype-tag { color: var(--blue); background: var(--blue-soft); border-radius: 999px; padding: 3px 7px; font-size: 11px; }
+    .readonly-tag { color: var(--green); background: var(--green-soft); border-radius: 999px; padding: 3px 7px; font-size: 11px; }
+    .context-content { max-width: 960px; margin: 20px auto; padding: 0 20px 24px; }
+    .context-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-bottom: 16px; }
+    .context-section { margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+    .context-section h3 { margin: 0 0 10px; font-size: 14px; }
+    .context-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+    .context-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 8px; border-radius: 6px; background: var(--surface-2); font-size: 12px; }
+    .context-row code { overflow-wrap: anywhere; }
+    .context-row .button, .context-row a:last-child { margin-left: auto; flex: none; }
+    .change-status { width: 25px; flex: none; color: var(--amber); font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .context-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
+    .document-view { max-height: 360px; margin-top: 10px; padding: 12px; overflow: auto; border-radius: 7px; background: light-dark(#f8f9fb, #101419); font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
+    .context-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr 1.15fr; }
+      .pane.sage-pane { grid-column: 1 / -1; }
+      .context-overview { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 680px) {
+      .workspace { grid-template-columns: 1fr; }
+      .pane.sage-pane { grid-column: auto; }
+      .topbar { align-items: flex-start; }
+      .brand { width: 100%; }
+      .summary { grid-template-columns: 1fr; }
+      .source-visual { grid-template-columns: 1fr; }
+      .wiki-thumbnail-card { grid-template-columns: 90px 1fr; }
+      .wiki-thumbnail-card .source-thumbnail,
+      .wiki-thumbnail-card .source-placeholder { width: 90px; height: 112px; }
+      .context-overview { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">D</span>
+        <div>
+          <div class="brand-title">Diophantine Review Workbench <span class="prototype-tag">Local</span></div>
+          <div class="brand-subtitle">Sources, code, and computation in one review window</div>
+        </div>
+      </div>
+      <div class="control-group">
+        <input class="input family-filter" id="family-filter" placeholder="Filter families…" aria-label="Filter families">
+        <label class="control-label" for="family-select">Family</label>
+        <select id="family-select" aria-label="Family"></select>
+        <span class="pane-meta" id="family-count">Loading…</span>
+      </div>
+      <button class="button small" id="open-development-context" type="button">Development context</button>
+      <span class="human-status"><span class="status-dot"></span>Human review pending</span>
+    </header>
+
+    <nav class="focusbar" aria-label="Review focus">
+      <span class="focus-label">Review focus</span>
+      <button class="focus-button" type="button" data-focus="definition" aria-pressed="true">Standard form</button>
+      <button class="focus-button" type="button" data-focus="status" aria-pressed="false">Status and scope</button>
+      <button class="focus-button" type="button" data-focus="solver" aria-pressed="false">Solver / completeness</button>
+      <button class="focus-button" type="button" data-focus="references" aria-pressed="false">References</button>
+    </nav>
+
+    <section class="workspace">
+      <section class="pane" aria-label="Sources">
+        <header class="pane-header">
+          <span class="pane-title">Sources</span>
+          <span class="pane-meta" id="source-count">0 sources</span>
+        </header>
+        <div class="pane-body">
+          <div class="summary" id="family-summary"></div>
+          <div class="section-label">Automatically linked</div>
+          <div class="source-list" id="source-list"></div>
+          <article class="source-preview" id="source-preview" aria-live="polite"></article>
+        </div>
+      </section>
+
+      <section class="pane" aria-label="Repository code">
+        <header class="pane-header">
+          <span class="pane-title">Repository code</span>
+          <span class="pane-meta">Read-only prototype</span>
+        </header>
+        <div class="editor-tabs" id="editor-tabs" role="tablist" aria-label="Related files"></div>
+        <div class="editor-path" id="editor-path"></div>
+        <div class="code-jumps" id="code-jumps" aria-label="Related code locations"></div>
+        <pre class="code-view"><code id="code-view"></code></pre>
+        <div class="tracebar" id="tracebar" aria-live="polite"></div>
+      </section>
+
+      <section class="pane sage-pane" aria-label="Sage session">
+        <header class="pane-header">
+          <span class="pane-title">Sage</span>
+          <span class="pane-meta" id="sage-status">Connecting to local Sage…</span>
+        </header>
+        <div class="security-note">Local execution: input can run arbitrary Sage/Python with your user permissions. Never expose this server to a network.</div>
+        <div class="terminal-toolbar">
+          <button class="button small" type="button" data-fill="classify">Insert classify example</button>
+          <button class="button small" type="button" data-fill="solve">Insert solve example</button>
+          <button class="button small ghost" id="clear-terminal" type="button">Clear</button>
+        </div>
+        <div class="terminal" id="terminal" role="log" aria-live="polite"></div>
+        <div class="sage-input-wrap">
+          <div class="sage-input-label">
+            <span>Free-form Sage input</span>
+            <span>Ctrl/⌘ + Enter to run</span>
+          </div>
+          <div class="sage-input-row">
+            <span class="sage-prompt" aria-hidden="true">sage:</span>
+            <textarea class="sage-input" id="sage-input" spellcheck="false" aria-label="Sage command"></textarea>
+            <div class="sage-input-actions">
+              <button class="button primary small" id="run-sage-input" type="button">Run</button>
+              <div class="history-actions">
+                <button class="button small" id="history-previous" type="button" aria-label="Previous Sage input">↑</button>
+                <button class="button small" id="history-next" type="button" aria-label="Next Sage input">↓</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="checklist">
+          <label class="check-row"><input type="checkbox" data-check="source"> I checked the scope in the primary source</label>
+          <label class="check-row"><input type="checkbox" data-check="code"> I understand the matcher and solver path</label>
+          <label class="check-row"><input type="checkbox" data-check="sage"> I personally supervised the core Sage checks</label>
+        </div>
+      </section>
+    </section>
+
+    <section class="review-dock" aria-label="Review notes">
+      <header class="dock-header">
+        <span class="dock-title">Review notes</span>
+        <span class="dock-caption">Browser-local only · never sent to the server or written to the repository</span>
+      </header>
+      <div class="notes-panel">
+        <textarea id="review-notes" placeholder="Record conclusions, questions, and follow-ups…" aria-label="Review notes"></textarea>
+        <div class="saved" id="saved-status" aria-live="polite"></div>
+      </div>
+    </section>
+  </main>
+
+  <dialog class="source-dialog" id="source-dialog" aria-labelledby="source-dialog-title">
+    <div class="dialog-shell">
+      <header class="dialog-header">
+        <span class="dialog-title" id="source-dialog-title">Source preview</span>
+        <a class="button small" id="dialog-original-link" target="_blank" rel="noreferrer">Open original</a>
+        <button class="button small" id="close-source-dialog" type="button">Close</button>
+      </header>
+      <div class="dialog-body" id="source-dialog-body"></div>
+    </div>
+  </dialog>
+
+  <dialog class="source-dialog" id="development-context-dialog" aria-labelledby="development-context-title">
+    <div class="dialog-shell">
+      <header class="dialog-header">
+        <span class="dialog-title" id="development-context-title">Development context</span>
+        <span class="readonly-tag">Read only</span>
+        <button class="button small" id="refresh-development-context" type="button">Refresh</button>
+        <button class="button small" id="close-development-context" type="button">Close</button>
+      </header>
+      <div class="dialog-body" id="development-context-body">
+        <div class="preview-loading">Loading current repository context…</div>
+      </div>
+    </div>
+  </dialog>
+
+  <script>
+    let families = {};
+
+    const state = {
+      family: localStorage.getItem('review-family') || 'pell',
+      source: 0,
+      file: 0,
+      focus: 'definition',
+      sageHistory: [],
+      sageHistoryIndex: 0,
+      sageSessionCode: []
+    };
+
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => [...document.querySelectorAll(selector)];
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+
+    async function loadDevelopmentDocument(path, label) {
+      const view = $('#development-document-view');
+      view.textContent = `Loading ${path}…`;
+      try {
+        const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+        if (!response.ok) throw new Error(`File endpoint returned ${response.status}`);
+        const content = await response.text();
+        $('#development-document-title').textContent = label;
+        view.textContent = content;
+        view.hidden = false;
+        view.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (error) {
+        view.textContent = `Unable to load ${path}: ${error.message}`;
+        view.hidden = false;
+      }
+    }
+
+    function renderDevelopmentContext(context) {
+      const sync = context.sync
+        ? `${context.sync.ahead} ahead · ${context.sync.behind} behind`
+        : 'No tracking branch';
+      const changes = context.workingTree.changes.length
+        ? context.workingTree.changes.map(change => `<li class="context-row"><span class="change-status">${escapeHtml(change.status)}</span><code>${escapeHtml(change.path)}</code></li>`).join('')
+        : '<li class="context-row"><span class="status-dot" style="color:var(--green)"></span>No tracked changes</li>';
+      const documents = context.documents.map(document => `<li class="context-row">
+        <span>${escapeHtml(document.label)}</span><code>${escapeHtml(document.path)}</code>
+        <button class="button small" type="button" data-development-document="${escapeHtml(document.path)}" data-document-label="${escapeHtml(document.label)}">View</button>
+      </li>`).join('');
+      const links = context.links || {};
+      const family = families[state.family] || { slug: state.family || 'current-family', name: state.family || 'current family' };
+      const relatedQuery = encodeURIComponent(`is:open ${family.slug} OR "${family.name}"`);
+
+      $('#development-context-body').innerHTML = `<div class="context-content">
+        <p class="context-note">This view re-reads Git metadata and project guidance from the local repository. It cannot edit files or run Git write operations.</p>
+        <div class="context-overview">
+          ${[
+            ['Branch', context.branch],
+            ['HEAD', context.head.shortHash || 'Unavailable'],
+            ['Tracking', context.tracking ? 'Configured' : 'None'],
+            ['Sync', sync]
+          ].map(([key, value]) => `<div class="summary-item"><span class="summary-key">${escapeHtml(key)}</span><span class="summary-value">${escapeHtml(value)}</span></div>`).join('')}
+        </div>
+        <section class="context-section">
+          <h3>Latest commit</h3>
+          <div class="context-row"><code>${escapeHtml(context.head.shortHash)}</code><span>${escapeHtml(context.head.subject)}</span><span class="pane-meta">${escapeHtml(context.head.committedAt)}</span></div>
+        </section>
+        <section class="context-section">
+          <h3>Tracked working tree · ${context.workingTree.total} change${context.workingTree.total === 1 ? '' : 's'}</h3>
+          <ul class="context-list">${changes}</ul>
+          <p class="context-note">Untracked filenames are never requested or displayed.</p>
+        </section>
+        <section class="context-section">
+          <h3>Project guidance and design</h3>
+          <ul class="context-list">${documents}</ul>
+          <h3 id="development-document-title" style="margin-top:14px">Document preview</h3>
+          <pre class="document-view" id="development-document-view" hidden></pre>
+        </section>
+        <section class="context-section">
+          <h3>Verification commands</h3>
+          <div class="context-actions">${context.verificationCommands.map(command => `<code class="context-row">${escapeHtml(command)}</code>`).join('')}</div>
+          <p class="context-note">These commands are shown for reviewer awareness only. This panel does not run them.</p>
+        </section>
+        <section class="context-section">
+          <h3>Repository links</h3>
+          <div class="context-actions">
+            ${links.repository ? `<a class="button small" href="${escapeHtml(links.repository)}" target="_blank" rel="noreferrer">Repository</a>` : ''}
+            ${links.pullRequests ? `<a class="button small" href="${escapeHtml(links.pullRequests)}" target="_blank" rel="noreferrer">Pull requests</a>` : ''}
+            ${links.issues ? `<a class="button small" href="${escapeHtml(links.issues)}" target="_blank" rel="noreferrer">Issues</a>` : ''}
+            ${links.repository ? `<a class="button small" href="${escapeHtml(links.repository)}/pulls?q=${relatedQuery}" target="_blank" rel="noreferrer">PRs related to ${escapeHtml(family.slug)}</a>` : ''}
+            ${links.repository ? `<a class="button small" href="${escapeHtml(links.repository)}/issues?q=${relatedQuery}" target="_blank" rel="noreferrer">Issues related to ${escapeHtml(family.slug)}</a>` : ''}
+          </div>
+          <p class="context-note">Links use only the canonical upstream repository. Personal fork remotes are never requested or displayed.</p>
+        </section>
+      </div>`;
+      $$('[data-development-document]').forEach(button => button.addEventListener('click', () => {
+        loadDevelopmentDocument(button.dataset.developmentDocument, button.dataset.documentLabel);
+      }));
+    }
+
+    async function openDevelopmentContext() {
+      const dialog = $('#development-context-dialog');
+      $('#development-context-body').innerHTML = '<div class="preview-loading">Loading current repository context…</div>';
+      if (!dialog.open) dialog.showModal();
+      try {
+        const response = await fetch('/api/development-context', { cache: 'no-store' });
+        const context = await response.json();
+        if (!response.ok) throw new Error(context.error || `Context endpoint returned ${response.status}`);
+        renderDevelopmentContext(context);
+      } catch (error) {
+        $('#development-context-body').innerHTML = `<div class="preview-loading">Unable to load development context: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderSummary() {
+      const f = families[state.family];
+      $('#family-summary').innerHTML = [
+        ['Name', f.name], ['Status', f.status], ['Form', f.form], ['Parents', f.parents.join(', ') || 'root'],
+        ['Priority', `Wave ${f.priority}`], ['Matcher', f.matcher ? 'implemented' : 'registry only']
+      ].map(([key, value]) => `<div class="summary-item"><span class="summary-key">${escapeHtml(key)}</span><span class="summary-value">${escapeHtml(value)}</span></div>`).join('');
+    }
+
+    async function renderSourcePreview(selected, familyAtRequest, sourceAtRequest) {
+      const preview = $('#source-preview');
+      const actions = `
+        <div class="source-actions">
+          ${(selected.pdfId || selected.wikiTitle) ? '<button class="button small primary" data-enlarge-preview type="button">Enlarge preview</button>' : ''}
+          ${selected.url ? `<a class="button small" href="${escapeHtml(selected.url)}" target="_blank" rel="noreferrer">Open original source</a>` : '<span class="pane-meta">No open URL recorded</span>'}
+          <button class="button small ghost" id="trace-source" type="button">Trace related code</button>
+        </div>`;
+
+      if (!selected.wikiTitle) {
+        const visual = selected.pdfId
+          ? `<button class="preview-launch" data-enlarge-preview type="button" aria-label="Enlarge PDF preview">
+               <iframe class="pdf-thumbnail-frame" src="/source/pdf/${encodeURIComponent(selected.pdfId)}#page=1&view=FitH&toolbar=0&navpanes=0" title="PDF first-page preview" tabindex="-1"></iframe>
+             </button>`
+          : '';
+        preview.innerHTML = `
+          ${visual}
+          <div class="source-visual">
+            <div class="source-placeholder" aria-hidden="true">${escapeHtml(selected.kind.slice(0, 1))}</div>
+            <div>
+              <div class="preview-kicker">${selected.pdfId ? 'Live PDF preview · page 1' : 'Document metadata'}</div>
+              <h3>${escapeHtml(selected.title)}</h3>
+              <p class="preview-description">${escapeHtml(selected.meta)}</p>
+              <p>${escapeHtml(selected.why)}</p>
+            </div>
+          </div>${actions}`;
+        attachSourceActions(selected);
+        return;
+      }
+
+      preview.innerHTML = '<div class="preview-loading">Loading live Wikipedia preview…</div>';
+      try {
+        const endpoint = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(selected.wikiTitle)}`;
+        const response = await fetch(endpoint, { headers: { accept: 'application/json' } });
+        if (!response.ok) throw new Error(`Wikipedia returned ${response.status}`);
+        const summary = await response.json();
+        if (state.family !== familyAtRequest || state.source !== sourceAtRequest) return;
+        const thumbnail = summary.thumbnail?.source
+          ? `<img class="source-thumbnail" src="${escapeHtml(summary.thumbnail.source)}" alt="Thumbnail from the Wikipedia article ${escapeHtml(summary.title || selected.title)}">`
+          : '<div class="source-placeholder" aria-hidden="true">W</div>';
+        preview.innerHTML = `
+          <button class="preview-launch" data-enlarge-preview type="button" aria-label="Enlarge Wikipedia page preview">
+          <div class="wiki-thumbnail-card">
+            ${thumbnail}
+            <div>
+              <div class="preview-kicker">Live Wikipedia preview · orientation only</div>
+              <h3>${escapeHtml(summary.title || selected.title)}</h3>
+              <p class="preview-description">${escapeHtml(summary.description || selected.meta)}</p>
+              <p>${escapeHtml(summary.extract || selected.why)}</p>
+            </div>
+          </div></button>${actions}`;
+        selected.wikiSummary = summary;
+      } catch (error) {
+        if (state.family !== familyAtRequest || state.source !== sourceAtRequest) return;
+        preview.innerHTML = `
+          <div class="source-visual">
+            <div class="source-placeholder" aria-hidden="true">W</div>
+            <div>
+              <div class="preview-kicker">Wikipedia preview unavailable</div>
+              <h3>${escapeHtml(selected.title)}</h3>
+              <p>${escapeHtml(selected.why)}</p>
+              <p>The original article is still available using the link below.</p>
+            </div>
+          </div>${actions}`;
+      }
+      attachSourceActions(selected);
+    }
+
+    function openSourceDialog(selected) {
+      const dialog = $('#source-dialog');
+      $('#source-dialog-title').textContent = selected.title;
+      $('#dialog-original-link').href = selected.url || '#';
+      $('#dialog-original-link').hidden = !selected.url;
+
+      if (selected.pdfId) {
+        $('#source-dialog-body').innerHTML = `<iframe class="pdf-dialog-frame" src="/source/pdf/${encodeURIComponent(selected.pdfId)}#page=1&view=FitH" title="${escapeHtml(selected.title)} PDF"></iframe>`;
+      } else {
+        const summary = selected.wikiSummary || {};
+        const image = summary.originalimage?.source || summary.thumbnail?.source;
+        $('#source-dialog-body').innerHTML = `
+          <article class="wiki-dialog-content">
+            ${image ? `<img src="${escapeHtml(image)}" alt="Illustration from ${escapeHtml(summary.title || selected.title)}">` : ''}
+            <div class="preview-kicker">Wikipedia page preview · orientation only</div>
+            <h2>${escapeHtml(summary.title || selected.title)}</h2>
+            <p class="wiki-dialog-description">${escapeHtml(summary.description || selected.meta)}</p>
+            <p>${escapeHtml(summary.extract || selected.why)}</p>
+            <p><a href="${selected.url}" target="_blank" rel="noreferrer">Continue reading on Wikipedia</a></p>
+          </article>`;
+      }
+      dialog.showModal();
+    }
+
+    function attachSourceActions(selected) {
+      const traceButton = $('#trace-source');
+      if (traceButton) {
+        traceButton.addEventListener('click', () => {
+          const f = families[state.family];
+          const refIndex = f.files.findIndex(file => file.label.endsWith('.yaml'));
+          state.file = refIndex < 0 ? 0 : refIndex;
+          state.focus = 'references';
+          renderFocus();
+          renderEditor();
+          $('#tracebar').textContent = `Linked ${selected.kind} source → ${f.files[state.file].path} → references/why`;
+        });
+      }
+      $$('[data-enlarge-preview]').forEach(button => button.addEventListener('click', () => openSourceDialog(selected)));
+    }
+
+    function renderSources() {
+      const f = families[state.family];
+      $('#source-count').textContent = `${f.sources.length} sources`;
+      $('#source-list').innerHTML = f.sources.map((source, index) => `
+        <button class="source-item" type="button" data-source-index="${index}" aria-pressed="${index === state.source}">
+          <span class="item-title"><span class="source-kind">${escapeHtml(source.kind)}</span>${escapeHtml(source.title)}</span>
+          <span class="item-meta">${escapeHtml(source.meta || 'Bibliography entry')}</span>
+        </button>`).join('');
+      const selected = f.sources[state.source];
+      renderSourcePreview(selected, state.family, state.source);
+      $$('[data-source-index]').forEach(button => button.addEventListener('click', () => {
+        state.source = Number(button.dataset.sourceIndex);
+        renderSources();
+      }));
+    }
+
+    async function renderEditor() {
+      const f = families[state.family];
+      $('#editor-tabs').innerHTML = f.files.map((file, index) => `
+        <button class="editor-tab" role="tab" type="button" data-file-index="${index}" aria-selected="${index === state.file}">${escapeHtml(file.label)}</button>`).join('');
+      const selected = f.files[state.file];
+      $('#editor-path').textContent = selected.path;
+      $('#code-view').innerHTML = '<span class="preview-loading">Loading the complete repository file…</span>';
+      $('#code-jumps').innerHTML = '<span class="code-jumps-label">Related locations</span>';
+      const requestFamily = state.family;
+      const requestFile = state.file;
+      $$('[data-file-index]').forEach(button => button.addEventListener('click', () => {
+        state.file = Number(button.dataset.fileIndex);
+        renderEditor();
+      }));
+
+      try {
+        if (!selected.code) {
+          const response = await fetch(`/api/file?path=${encodeURIComponent(selected.path)}`);
+          if (!response.ok) throw new Error(`File endpoint returned ${response.status}`);
+          selected.code = await response.text();
+        }
+        if (state.family !== requestFamily || state.file !== requestFile) return;
+        const hitSet = new Set(selected.hits || []);
+        const lines = selected.code.split(/\r?\n/);
+        $('#code-view').innerHTML = lines.map((line, index) => {
+          const lineNumber = index + 1;
+          return `<span class="code-line ${hitSet.has(lineNumber) ? 'is-hit' : ''}" data-code-line="${lineNumber}"><span class="line-number">${lineNumber}</span><span class="line-content">${escapeHtml(line) || ' '}</span></span>`;
+        }).join('');
+        const hits = selected.hits || [];
+        $('#code-jumps').innerHTML = `<span class="code-jumps-label">${lines.length} lines · ${hits.length} related location${hits.length === 1 ? '' : 's'}</span>${hits.map(line => `<button class="button small" type="button" data-jump-line="${line}">L${line}</button>`).join('')}`;
+        $$('[data-jump-line]').forEach(button => button.addEventListener('click', () => {
+          const target = $(`[data-code-line="${button.dataset.jumpLine}"]`);
+          target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }));
+        $('#tracebar').textContent = `${f.name} · complete ${selected.kind} file · highlighted lines are exact slug/reference matches`;
+      } catch (error) {
+        if (state.family !== requestFamily || state.file !== requestFile) return;
+        $('#code-view').textContent = `Unable to load ${selected.path}: ${error.message}`;
+        $('#tracebar').textContent = 'Repository file unavailable';
+      }
+    }
+
+    function renderFocus() {
+      $$('[data-focus]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.focus === state.focus)));
+    }
+
+    function initialTerminal() {
+      const f = families[state.family];
+      const example = f.example || '# No parser example is registered for this family';
+      $('#terminal').innerHTML = `<span class="dim">Local Sage execution · no simulated mathematical results</span>\n<span class="prompt">sage:</span> from diophantine_classifier import classify, solve\n<span class="prompt">sage:</span> equation = "${escapeHtml(example)}"\n<span class="dim">Enter arbitrary Sage/Python code below. Only actual process output is shown.</span>`;
+      $('#sage-input').value = f.example ? `classify("${f.example}")` : example;
+    }
+
+    function fillSageInput(kind) {
+      const f = families[state.family];
+      const example = f.example || '# No parser example is registered for this family';
+      $('#sage-input').value = {
+        classify: f.example ? `classify("${f.example}")` : example,
+        solve: f.example ? `solve("${f.example}")` : example
+      }[kind];
+      $('#sage-input').focus();
+    }
+
+    async function executeSageInput() {
+      const input = $('#sage-input');
+      const command = input.value;
+      if (!command.trim()) return;
+      state.sageHistory.push(command);
+      state.sageHistoryIndex = state.sageHistory.length;
+      const runButton = $('#run-sage-input');
+      runButton.disabled = true;
+      runButton.textContent = 'Running…';
+      $('#terminal').innerHTML += `\n\n<span class="prompt">sage:</span> ${escapeHtml(command)}\n<span class="dim">Running in local Sage…</span>`;
+      $('#terminal').scrollTop = $('#terminal').scrollHeight;
+      try {
+        const sessionCode = [...state.sageSessionCode, command].join('\n');
+        const response = await fetch('/api/sage/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Review-Workbench': '1' },
+          body: JSON.stringify({ code: sessionCode })
+        });
+        const result = await response.json();
+        const pending = $('#terminal').lastElementChild;
+        pending?.remove();
+        if (result.unsupported) {
+          const priorOutput = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+          if (priorOutput) $('#terminal').innerHTML += `<span class="ok">${escapeHtml(priorOutput)}</span>\n`;
+          $('#terminal').innerHTML += `<span class="warn">Classified successfully; automatic solver not implemented.</span>\n<span class="dim">${escapeHtml(result.unsupportedMessage)}</span>\n<span class="dim">Real Sage · ${result.durationMs} ms</span>`;
+        } else if (result.ok) {
+          state.sageSessionCode.push(command);
+          const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim() || '(completed with no output)';
+          $('#terminal').innerHTML += `<span class="ok">${escapeHtml(output)}</span>\n<span class="dim">Real Sage · ${result.durationMs} ms</span>`;
+        } else {
+          const error = [result.error, result.stderr, result.stdout].filter(Boolean).join('\n').trim() || 'Sage execution failed.';
+          $('#terminal').innerHTML += `<span class="error">${escapeHtml(error)}</span>`;
+        }
+      } catch (error) {
+        $('#terminal').innerHTML += `\n<span class="error">Workbench connection failed: ${escapeHtml(error.message)}</span>`;
+      } finally {
+        runButton.disabled = false;
+        runButton.textContent = 'Run';
+        $('#terminal').scrollTop = $('#terminal').scrollHeight;
+      }
+    }
+
+    function moveSageHistory(direction) {
+      if (!state.sageHistory.length) return;
+      state.sageHistoryIndex = Math.max(0, Math.min(state.sageHistory.length, state.sageHistoryIndex + direction));
+      $('#sage-input').value = state.sageHistoryIndex === state.sageHistory.length
+        ? ''
+        : state.sageHistory[state.sageHistoryIndex];
+      $('#sage-input').focus();
+    }
+
+    function loadNotes() {
+      $('#review-notes').value = localStorage.getItem(`review-notes-${state.family}`) || '';
+      $('#saved-status').textContent = '';
+    }
+
+    function resetChecks() { $$('[data-check]').forEach(box => { box.checked = false; }); }
+
+    function renderFamilyOptions(filter = '') {
+      const query = filter.trim().toLowerCase();
+      const matches = Object.values(families).filter(family =>
+        !query || family.slug.includes(query) || family.name.toLowerCase().includes(query)
+      );
+      $('#family-select').innerHTML = matches.length
+        ? matches.map(family => `<option value="${escapeHtml(family.slug)}">${escapeHtml(family.slug)} — ${escapeHtml(family.name)}</option>`).join('')
+        : '<option value="" disabled>No matching families</option>';
+      if (matches.some(family => family.slug === state.family)) $('#family-select').value = state.family;
+      $('#family-count').textContent = `${matches.length} / ${Object.keys(families).length} families`;
+      return matches;
+    }
+
+    function renderAll() {
+      if (!families[state.family]) return;
+      $('#family-select').value = state.family;
+      renderSummary();
+      renderSources();
+      renderFocus();
+      renderEditor();
+      state.sageSessionCode = [];
+      initialTerminal();
+      loadNotes();
+      resetChecks();
+    }
+
+    $('#family-select').addEventListener('change', event => {
+      if (!event.target.value) return;
+      state.family = event.target.value;
+      state.source = 0;
+      state.file = 0;
+      state.focus = 'definition';
+      localStorage.setItem('review-family', state.family);
+      renderAll();
+    });
+    $('#family-filter').addEventListener('input', event => {
+      const matches = renderFamilyOptions(event.target.value);
+      if (matches.length === 1 && matches[0].slug !== state.family) {
+        state.family = matches[0].slug;
+        state.source = 0;
+        state.file = 0;
+        state.focus = 'definition';
+        localStorage.setItem('review-family', state.family);
+        renderAll();
+      }
+    });
+    $$('[data-focus]').forEach(button => button.addEventListener('click', () => {
+      state.focus = button.dataset.focus;
+      renderFocus();
+      renderEditor();
+    }));
+    $$('[data-fill]').forEach(button => button.addEventListener('click', () => fillSageInput(button.dataset.fill)));
+    $('#clear-terminal').addEventListener('click', () => {
+      state.sageSessionCode = [];
+      initialTerminal();
+    });
+    $('#run-sage-input').addEventListener('click', executeSageInput);
+    $('#sage-input').addEventListener('keydown', event => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        executeSageInput();
+      }
+    });
+    $('#history-previous').addEventListener('click', () => moveSageHistory(-1));
+    $('#history-next').addEventListener('click', () => moveSageHistory(1));
+    $('#review-notes').addEventListener('input', event => {
+      localStorage.setItem(`review-notes-${state.family}`, event.target.value);
+      $('#saved-status').textContent = 'Saved in this browser';
+    });
+    $('#close-source-dialog').addEventListener('click', () => $('#source-dialog').close());
+    $('#source-dialog').addEventListener('click', event => {
+      if (event.target === $('#source-dialog')) $('#source-dialog').close();
+    });
+    $('#source-dialog').addEventListener('close', () => { $('#source-dialog-body').innerHTML = ''; });
+    $('#open-development-context').addEventListener('click', openDevelopmentContext);
+    $('#refresh-development-context').addEventListener('click', openDevelopmentContext);
+    $('#close-development-context').addEventListener('click', () => $('#development-context-dialog').close());
+    $('#development-context-dialog').addEventListener('click', event => {
+      if (event.target === $('#development-context-dialog')) $('#development-context-dialog').close();
+    });
+
+    async function initialize() {
+      try {
+        const sageStatusRequest = fetch('/api/sage/status');
+        const catalogResponse = await fetch('/api/catalog');
+        if (!catalogResponse.ok) throw new Error(`Catalog endpoint returned ${catalogResponse.status}`);
+        const catalog = await catalogResponse.json();
+        families = Object.fromEntries(catalog.families.map(family => [family.slug, family]));
+        if (!families[state.family]) state.family = families.pell ? 'pell' : catalog.families[0].slug;
+        renderFamilyOptions();
+        renderAll();
+        const sageResponse = await sageStatusRequest;
+        if (sageResponse.ok) {
+          const sage = await sageResponse.json();
+          $('#sage-status').textContent = sage.available
+            ? `${sage.label} · ${sage.version}`
+            : `Unavailable · ${sage.message}`;
+        } else {
+          $('#sage-status').textContent = 'Sage status unavailable';
+        }
+      } catch (error) {
+        $('#family-count').textContent = 'Catalog unavailable';
+        $('#source-preview').innerHTML = `<div class="preview-loading">Unable to load the repository catalog: ${escapeHtml(error.message)}</div>`;
+        $('#code-view').textContent = 'Start the local review-workbench server to load repository data.';
+      }
+    }
+
+    initialize();
+  </script>
+</body>
+</html>

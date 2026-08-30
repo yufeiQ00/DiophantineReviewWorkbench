@@ -1,0 +1,14 @@
+{
+  "name": "diophantine-review-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local review workbench for DiophantineClassifier families",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
