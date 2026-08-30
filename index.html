@@ -164,6 +164,10 @@
     .source-preview h3 { margin: 0 0 6px; font-size: 14px; }
     .source-preview p { margin: 6px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
     .source-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .match-notice { margin: 9px 0 0; padding: 8px 9px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; line-height: 1.45; }
+    .match-notice.found { color: var(--green); background: var(--green-soft); }
+    .match-notice.pending { color: var(--blue); background: var(--blue-soft); }
+    .match-notice.unavailable { color: var(--amber); background: var(--amber-soft); }
     .preview-launch {
       position: relative;
       width: 100%;
@@ -607,12 +611,51 @@
       ].map(([key, value]) => `<div class="summary-item"><span class="summary-key">${escapeHtml(key)}</span><span class="summary-value">${escapeHtml(value)}</span></div>`).join('');
     }
 
+    function sourceDiscoveryNotice(selected) {
+      const discovery = selected.discovery;
+      if (!discovery) return '';
+      if (discovery.status === 'loading') {
+        return '<div class="match-notice pending">Checking OpenAlex for a title, year, and author match…</div>';
+      }
+      if (discovery.status === 'found') {
+        return `<div class="match-notice found">Open-access PDF matched by ${escapeHtml(discovery.provider)} (${escapeHtml(discovery.confidence)}): ${escapeHtml(discovery.matchedTitle)} (${escapeHtml(discovery.matchedYear)}). Please verify the first page before relying on it.</div>`;
+      }
+      if (discovery.status === 'record_only') {
+        return `<div class="match-notice unavailable">Bibliographic record matched by ${escapeHtml(discovery.provider)} (${escapeHtml(discovery.confidence)}): ${escapeHtml(discovery.matchedTitle)} (${escapeHtml(discovery.matchedYear)}). No direct open-access PDF is indexed, but the source record is linked below.</div>`;
+      }
+      return `<div class="match-notice unavailable">${escapeHtml(discovery.message || discovery.error || 'No reliable open-access PDF match was found.')}</div>`;
+    }
+
+    async function discoverOpenAccess(selected, familyAtRequest, sourceAtRequest) {
+      try {
+        const response = await fetch(`/api/source/resolve?id=${encodeURIComponent(selected.key)}`, { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Open-access lookup returned ${response.status}`);
+        selected.discovery = result;
+        if (result.status === 'found') selected.pdfId = result.pdfId;
+      } catch (error) {
+        selected.discovery = { status: 'error', error: `Open-access lookup failed: ${error.message}` };
+      }
+      if (state.family === familyAtRequest) {
+        renderSources();
+      }
+    }
+
     async function renderSourcePreview(selected, familyAtRequest, sourceAtRequest) {
       const preview = $('#source-preview');
+      const shouldAutoDiscover = Boolean(selected.key && !selected.pdfId && !selected.discovery);
+      if (shouldAutoDiscover) selected.discovery = { status: 'loading' };
+      const discoveredUrl = selected.discovery?.landingPageUrl || selected.url;
+      const showSearchFallback = Boolean(selected.key && !selected.pdfId);
+      const showDiscoveryControl = showSearchFallback
+        && (!selected.discovery || ['loading', 'error'].includes(selected.discovery.status));
       const actions = `
         <div class="source-actions">
           ${(selected.pdfId || selected.wikiTitle) ? '<button class="button small primary" data-enlarge-preview type="button">Enlarge preview</button>' : ''}
-          ${selected.url ? `<a class="button small" href="${escapeHtml(selected.url)}" target="_blank" rel="noreferrer">Open original source</a>` : '<span class="pane-meta">No open URL recorded</span>'}
+          ${discoveredUrl ? `<a class="button small" href="${escapeHtml(discoveredUrl)}" target="_blank" rel="noreferrer">Open source record</a>` : '<span class="pane-meta">No URL recorded in the repository</span>'}
+          ${showDiscoveryControl ? `<button class="button small primary" id="find-open-copy" type="button" ${selected.discovery?.status === 'loading' ? 'disabled' : ''}>${selected.discovery?.status === 'loading' ? 'Matching source…' : 'Retry source match'}</button>` : ''}
+          ${showSearchFallback && selected.scholarUrl ? `<a class="button small" href="${escapeHtml(selected.scholarUrl)}" target="_blank" rel="noreferrer">Search Google Scholar</a>` : ''}
+          ${showSearchFallback && selected.googlePdfUrl ? `<a class="button small" href="${escapeHtml(selected.googlePdfUrl)}" target="_blank" rel="noreferrer">Search Google for PDF</a>` : ''}
           <button class="button small ghost" id="trace-source" type="button">Trace related code</button>
         </div>`;
 
@@ -632,8 +675,9 @@
               <p class="preview-description">${escapeHtml(selected.meta)}</p>
               <p>${escapeHtml(selected.why)}</p>
             </div>
-          </div>${actions}`;
+          </div>${sourceDiscoveryNotice(selected)}${actions}`;
         attachSourceActions(selected);
+        if (shouldAutoDiscover) discoverOpenAccess(selected, familyAtRequest, sourceAtRequest);
         return;
       }
 
@@ -678,8 +722,9 @@
     function openSourceDialog(selected) {
       const dialog = $('#source-dialog');
       $('#source-dialog-title').textContent = selected.title;
-      $('#dialog-original-link').href = selected.url || '#';
-      $('#dialog-original-link').hidden = !selected.url;
+      const originalUrl = selected.discovery?.landingPageUrl || selected.url;
+      $('#dialog-original-link').href = originalUrl || '#';
+      $('#dialog-original-link').hidden = !originalUrl;
 
       if (selected.pdfId) {
         $('#source-dialog-body').innerHTML = `<iframe class="pdf-dialog-frame" src="/source/pdf/${encodeURIComponent(selected.pdfId)}#page=1&view=FitH" title="${escapeHtml(selected.title)} PDF"></iframe>`;
@@ -700,6 +745,16 @@
     }
 
     function attachSourceActions(selected) {
+      const findButton = $('#find-open-copy');
+      if (findButton) {
+        findButton.addEventListener('click', () => {
+          const familyAtRequest = state.family;
+          const sourceAtRequest = state.source;
+          selected.discovery = { status: 'loading' };
+          renderSourcePreview(selected, familyAtRequest, sourceAtRequest);
+          discoverOpenAccess(selected, familyAtRequest, sourceAtRequest);
+        });
+      }
       const traceButton = $('#trace-source');
       if (traceButton) {
         traceButton.addEventListener('click', () => {
@@ -721,7 +776,7 @@
       $('#source-list').innerHTML = f.sources.map((source, index) => `
         <button class="source-item" type="button" data-source-index="${index}" aria-pressed="${index === state.source}">
           <span class="item-title"><span class="source-kind">${escapeHtml(source.kind)}</span>${escapeHtml(source.title)}</span>
-          <span class="item-meta">${escapeHtml(source.meta || 'Bibliography entry')}</span>
+          <span class="item-meta">${escapeHtml(source.meta || 'Bibliography entry')}${source.discovery?.status === 'loading' ? ' · Matching…' : ''}${source.discovery?.status === 'found' ? ' · Open PDF matched' : ''}${source.discovery?.status === 'record_only' ? ' · Source record matched' : ''}${source.discovery?.status === 'not_found' ? ' · Manual search available' : ''}</span>
         </button>`).join('');
       const selected = f.sources[state.source];
       renderSourcePreview(selected, state.family, state.source);
@@ -729,6 +784,13 @@
         state.source = Number(button.dataset.sourceIndex);
         renderSources();
       }));
+      const familyAtRequest = state.family;
+      f.sources.forEach((source, index) => {
+        if (source.key && !source.pdfId && !source.discovery) {
+          source.discovery = { status: 'loading' };
+          discoverOpenAccess(source, familyAtRequest, index);
+        }
+      });
     }
 
     async function renderEditor() {

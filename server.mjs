@@ -1,8 +1,11 @@
 import { createReadStream } from 'node:fs';
+import { lookup } from 'node:dns/promises';
 import { readFile, readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { isIP } from 'node:net';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -14,7 +17,11 @@ if (repositoryArgumentIndex >= 0 && !repositoryArgument) {
 const repositoryRoot = resolve(repositoryArgument || process.env.REVIEW_REPOSITORY_ROOT || resolve(root, '..'));
 const familyDirectory = resolve(repositoryRoot, 'diophantine_classifier', 'data', 'families');
 const bibliographyPath = resolve(repositoryRoot, 'diophantine_classifier', 'data', 'references.bib');
+const verifiedSourcesPath = resolve(root, 'verified-sources.json');
 const port = Number(process.env.REVIEW_WORKBENCH_PORT || 4173);
+const maximumPdfBytes = 50 * 1024 * 1024;
+const resolvedReferenceCache = new Map();
+const resolvedPdfSources = new Map();
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -349,7 +356,44 @@ function parseBibtex(text) {
 }
 
 function cleanBibTitle(title = '') {
-  return title.replace(/[{}]/g, '').replace(/\\([&%#_])/g, '$1');
+  return title
+    .replace(/[{}$]/g, '')
+    .replace(/\\(?:emph|textit|textbf|mathrm|operatorname)\s*/g, '')
+    .replace(/\\([&%#_])/g, '$1')
+    .replace(/\\["'`^~=.]?\s*([A-Za-z])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizedWords(value = '') {
+  return cleanBibTitle(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .match(/[a-z0-9]+/g) || [];
+}
+
+function titleSimilarity(left, right) {
+  const leftWords = new Set(normalizedWords(left));
+  const rightWords = new Set(normalizedWords(right));
+  if (!leftWords.size || !rightWords.size) return 0;
+  let shared = 0;
+  leftWords.forEach(word => { if (rightWords.has(word)) shared += 1; });
+  return (2 * shared) / (leftWords.size + rightWords.size);
+}
+
+function firstAuthorSurname(author = '') {
+  const firstAuthor = author.split(/\s+and\s+/i)[0];
+  const words = normalizedWords(firstAuthor.includes(',') ? firstAuthor.split(',')[0] : firstAuthor);
+  return words.at(-1) || '';
+}
+
+function manualSearchLinks(title) {
+  const exactTitle = `"${cleanBibTitle(title)}"`;
+  return {
+    scholarUrl: `https://scholar.google.com/scholar?q=${encodeURIComponent(exactTitle)}`,
+    googlePdfUrl: `https://www.google.com/search?q=${encodeURIComponent(`${exactTitle} filetype:pdf`)}`
+  };
 }
 
 function findHitLines(content, needles) {
@@ -363,31 +407,156 @@ function findHitLines(content, needles) {
   return hits.slice(0, 80);
 }
 
-function referenceSource(reference, bibEntry) {
+function validateVerifiedSource(referenceKey, bibEntry, verifiedSource) {
+  if (!verifiedSource) return;
+  const titleMatches = titleSimilarity(bibEntry?.title, verifiedSource.title) >= 0.92;
+  const authorMatches = firstAuthorSurname(bibEntry?.author) === firstAuthorSurname(verifiedSource.author);
+  const digestValid = /^[a-f0-9]{64}$/i.test(verifiedSource.sha256 || '');
+  if (!bibEntry || !titleMatches || !authorMatches || !digestValid || !verifiedSource.url) {
+    throw new Error(`Verified source metadata is invalid for ${referenceKey}.`);
+  }
+}
+
+function referenceSource(reference, bibEntry, verifiedSource) {
+  validateVerifiedSource(reference.key, bibEntry, verifiedSource);
   const title = cleanBibTitle(bibEntry?.title) || reference.key;
   const arxivId = bibEntry?.eprint || bibEntry?.url?.match(/arxiv\.org\/(?:abs|pdf)\/([^?#/]+)/i)?.[1];
-  const url = bibEntry?.url || (bibEntry?.doi ? `https://doi.org/${bibEntry.doi}` : '');
+  const url = bibEntry?.url || (bibEntry?.doi ? `https://doi.org/${bibEntry.doi}` : '') || verifiedSource?.url || '';
   const pdfUrl = arxivId
     ? `https://arxiv.org/pdf/${arxivId}`
-    : (/\.pdf(?:$|[?#])/i.test(url) ? url : '');
+    : (/\.pdf(?:$|[?#])/i.test(url) ? url : (verifiedSource?.url || ''));
+  const verifiedPdf = Boolean(verifiedSource?.url && pdfUrl === verifiedSource.url);
   return {
-    kind: arxivId ? 'arXiv' : (bibEntry?.doi ? 'DOI' : 'Reference'),
+    key: reference.key,
+    kind: arxivId ? 'arXiv' : (verifiedPdf ? 'Verified PDF' : (bibEntry?.doi ? 'DOI' : 'Reference')),
     title,
     meta: [bibEntry?.author, bibEntry?.year, bibEntry?.journal || bibEntry?.booktitle].filter(Boolean).join(' · '),
     why: `Registry why: ${reference.why}`,
+    doi: bibEntry?.doi || '',
+    year: bibEntry?.year || '',
+    author: bibEntry?.author || '',
     url,
     pdfId: pdfUrl ? reference.key : '',
-    pdfUrl
+    pdfUrl,
+    verifiedPdfHash: verifiedPdf ? verifiedSource.sha256 : '',
+    allowLegacyHttp: verifiedPdf && pdfUrl.startsWith('http://'),
+    ...manualSearchLinks(title)
   };
 }
 
+function matchOpenAlexWork(entry, work) {
+  const similarity = titleSimilarity(entry.title, work.display_name);
+  const targetYear = Number(entry.year);
+  const yearMatches = !targetYear || targetYear === Number(work.publication_year);
+  const surname = firstAuthorSurname(entry.author);
+  const authorMatches = !surname || (work.authorships || []).some(authorship =>
+    normalizedWords(authorship.author?.display_name).includes(surname)
+  );
+  const targetDoi = entry.doi?.toLowerCase().replace(/^https?:\/\/(?:dx\.)?doi\.org\//, '');
+  const workDoi = work.doi?.toLowerCase().replace(/^https?:\/\/(?:dx\.)?doi\.org\//, '');
+  const doiMatches = Boolean(targetDoi && workDoi && targetDoi === workDoi);
+  const accepted = targetDoi
+    ? doiMatches
+    : (similarity >= 0.92 && yearMatches && authorMatches);
+  return { accepted, similarity, yearMatches, authorMatches, doiMatches };
+}
+
+function safeHttpsUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return '';
+    if (!parsed.hostname) return '';
+    return parsed.href;
+  } catch {
+    return '';
+  }
+}
+
+async function resolveOpenAccessSource(sourceId) {
+  if (resolvedReferenceCache.has(sourceId)) return resolvedReferenceCache.get(sourceId);
+  const bibliography = await readFile(bibliographyPath, 'utf8');
+  const entry = parseBibtex(bibliography).get(sourceId);
+  if (!entry?.title) throw new Error('Unknown bibliography entry.');
+
+  const endpoint = new URL('https://api.openalex.org/works');
+  endpoint.searchParams.set('search', cleanBibTitle(entry.title));
+  endpoint.searchParams.set('per-page', '5');
+  endpoint.searchParams.set('select', 'id,doi,display_name,publication_year,best_oa_location,authorships');
+  const upstream = await fetch(endpoint, {
+    headers: { Accept: 'application/json', 'User-Agent': 'DiophantineReviewWorkbench/0.2' },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!upstream.ok) throw new Error(`OpenAlex returned ${upstream.status}.`);
+  const payload = await upstream.json();
+  const candidates = (payload.results || [])
+    .map(work => ({ work, match: matchOpenAlexWork(entry, work) }))
+    .filter(candidate => candidate.match.accepted)
+    .sort((left, right) => {
+      const leftPdf = Boolean(safeHttpsUrl(left.work.best_oa_location?.pdf_url));
+      const rightPdf = Boolean(safeHttpsUrl(right.work.best_oa_location?.pdf_url));
+      return Number(right.match.doiMatches) - Number(left.match.doiMatches)
+        || Number(rightPdf) - Number(leftPdf)
+        || right.match.similarity - left.match.similarity;
+    });
+  const matched = candidates.find(candidate => safeHttpsUrl(candidate.work.best_oa_location?.pdf_url));
+  const searchLinks = manualSearchLinks(entry.title);
+
+  if (!matched) {
+    const metadataMatch = candidates[0];
+    if (metadataMatch) {
+      const { work, match } = metadataMatch;
+      const result = {
+        status: 'record_only',
+        provider: 'OpenAlex',
+        confidence: match.doiMatches ? 'DOI match' : 'title, year, and author match',
+        matchedTitle: work.display_name,
+        matchedYear: work.publication_year,
+        landingPageUrl: safeHttpsUrl(work.best_oa_location?.landing_page_url) || safeHttpsUrl(work.doi) || safeHttpsUrl(work.id),
+        openAlexUrl: safeHttpsUrl(work.id),
+        message: 'A reliable bibliographic record was found, but it has no direct HTTPS open-access PDF in OpenAlex.',
+        ...searchLinks
+      };
+      resolvedReferenceCache.set(sourceId, result);
+      return result;
+    }
+    const result = {
+      status: 'not_found',
+      provider: 'OpenAlex',
+      message: 'No sufficiently reliable bibliographic or open-access match was found.',
+      ...searchLinks
+    };
+    resolvedReferenceCache.set(sourceId, result);
+    return result;
+  }
+
+  const { work, match } = matched;
+  const pdfUrl = safeHttpsUrl(work.best_oa_location.pdf_url);
+  const pdfId = `openalex:${sourceId}`;
+  resolvedPdfSources.set(pdfId, pdfUrl);
+  const result = {
+    status: 'found',
+    provider: 'OpenAlex',
+    confidence: match.doiMatches ? 'DOI match' : 'title, year, and author match',
+    matchedTitle: work.display_name,
+    matchedYear: work.publication_year,
+    pdfId,
+    landingPageUrl: safeHttpsUrl(work.best_oa_location.landing_page_url) || safeHttpsUrl(work.doi) || safeHttpsUrl(work.id),
+    openAlexUrl: safeHttpsUrl(work.id),
+    ...searchLinks
+  };
+  resolvedReferenceCache.set(sourceId, result);
+  return result;
+}
+
 async function buildCatalog() {
-  const [names, bibliography, ...sourceContents] = await Promise.all([
+  const [names, bibliography, verifiedSourcesText, ...sourceContents] = await Promise.all([
     readdir(familyDirectory),
     readFile(bibliographyPath, 'utf8'),
+    readFile(verifiedSourcesPath, 'utf8'),
     ...sourceSpecs.map(spec => readFile(resolve(repositoryRoot, spec.path), 'utf8'))
   ]);
   const bibEntries = parseBibtex(bibliography);
+  const verifiedSources = JSON.parse(verifiedSourcesText);
   const pdfSources = new Map();
   const families = [];
 
@@ -396,8 +565,20 @@ async function buildCatalog() {
     const slug = topValue(yaml, 'slug', filename.slice(0, -5));
     const name = topValue(yaml, 'name', slug);
     const references = familyReferences(yaml);
-    const sources = references.map(reference => referenceSource(reference, bibEntries.get(reference.key)));
-    sources.forEach(source => { if (source.pdfId) pdfSources.set(source.pdfId, source.pdfUrl); });
+    const sources = references.map(reference => referenceSource(
+      reference,
+      bibEntries.get(reference.key),
+      verifiedSources[reference.key]
+    ));
+    sources.forEach(source => {
+      if (source.pdfId) {
+        pdfSources.set(source.pdfId, {
+          url: source.pdfUrl,
+          expectedSha256: source.verifiedPdfHash,
+          allowHttp: source.allowLegacyHttp
+        });
+      }
+    });
     sources.push({
       kind: 'Wiki',
       title: `${name} on Wikipedia`,
@@ -478,20 +659,104 @@ async function serveRepositoryFile(relativePath, response) {
   }
 }
 
+function isPrivateAddress(address) {
+  const normalized = address.toLowerCase().replace(/^\[|\]$/g, '');
+  if (normalized === '::1' || normalized === '::' || normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+  if (/^fe[89ab]/.test(normalized)) return true;
+  if (normalized.startsWith('::ffff:')) return true;
+  const mappedIpv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  const ipv4 = mappedIpv4 || (isIP(normalized) === 4 ? normalized : '');
+  if (!ipv4) return false;
+  const octets = ipv4.split('.').map(Number);
+  return octets[0] === 0
+    || octets[0] === 10
+    || octets[0] === 127
+    || (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127)
+    || (octets[0] === 169 && octets[1] === 254)
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168)
+    || (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19))
+    || octets[0] >= 224;
+}
+
+async function validatePublicPdfUrl(value, { allowHttp = false } = {}) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('The PDF URL is invalid.');
+  }
+  const protocolAllowed = parsed.protocol === 'https:' || (allowHttp && parsed.protocol === 'http:');
+  if (!protocolAllowed || parsed.username || parsed.password || !parsed.hostname) {
+    throw new Error(allowHttp
+      ? 'Only credential-free HTTP(S) PDF URLs are allowed for this verified source.'
+      : 'Only credential-free HTTPS PDF URLs are allowed.');
+  }
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (hostname === 'localhost' || hostname.endsWith('.localhost') || isPrivateAddress(hostname)) {
+    throw new Error('Private-network PDF URLs are not allowed.');
+  }
+  const addresses = await lookup(hostname, { all: true });
+  if (!addresses.length || addresses.some(result => isPrivateAddress(result.address))) {
+    throw new Error('The PDF host did not resolve to a public address.');
+  }
+  return parsed;
+}
+
+async function fetchPublicPdf(sourceUrl, { allowHttp = false, expectedSha256 = '' } = {}) {
+  if (allowHttp && !/^[a-f0-9]{64}$/i.test(expectedSha256)) {
+    throw new Error('Legacy HTTP PDFs require a pinned SHA-256 digest.');
+  }
+  let currentUrl = await validatePublicPdfUrl(sourceUrl, { allowHttp });
+  for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+    const upstream = await fetch(currentUrl, {
+      headers: { 'User-Agent': 'DiophantineReviewWorkbench/0.2' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30000)
+    });
+    if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+      if (redirectCount === 5) throw new Error('The PDF source redirected too many times.');
+      const location = upstream.headers.get('location');
+      if (!location) throw new Error('The PDF source returned an invalid redirect.');
+      currentUrl = await validatePublicPdfUrl(new URL(location, currentUrl).href, { allowHttp });
+      continue;
+    }
+    if (!upstream.ok) throw new Error(`Upstream returned ${upstream.status}.`);
+    const contentType = upstream.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+    if (contentType !== 'application/pdf' && contentType !== 'application/octet-stream') {
+      throw new Error(`Upstream returned ${contentType || 'an unknown content type'}, not a PDF.`);
+    }
+    const declaredSize = Number(upstream.headers.get('content-length'));
+    if (declaredSize > maximumPdfBytes) throw new Error('The PDF exceeds the 50 MB preview limit.');
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of upstream.body) {
+      total += chunk.length;
+      if (total > maximumPdfBytes) throw new Error('The PDF exceeds the 50 MB preview limit.');
+      chunks.push(chunk);
+    }
+    const bytes = Buffer.concat(chunks, total);
+    if (expectedSha256) {
+      const actualSha256 = createHash('sha256').update(bytes).digest('hex');
+      if (actualSha256.toLowerCase() !== expectedSha256.toLowerCase()) {
+        throw new Error('The verified PDF digest changed; manual re-verification is required.');
+      }
+    }
+    return bytes;
+  }
+  throw new Error('PDF preview unavailable.');
+}
+
 async function servePdf(sourceId, response) {
   const { pdfSources } = await buildCatalog();
-  const sourceUrl = pdfSources.get(sourceId);
-  if (!sourceUrl) {
+  const source = pdfSources.get(sourceId) || resolvedPdfSources.get(sourceId);
+  if (!source) {
     response.writeHead(404).end('Unknown PDF source');
     return;
   }
   try {
-    const upstream = await fetch(sourceUrl, {
-      headers: { 'User-Agent': 'DiophantineReviewWorkbench/0.1' },
-      redirect: 'follow'
-    });
-    if (!upstream.ok) throw new Error(`Upstream returned ${upstream.status}`);
-    const bytes = Buffer.from(await upstream.arrayBuffer());
+    const sourceSpec = typeof source === 'string' ? { url: source } : source;
+    const bytes = await fetchPublicPdf(sourceSpec.url, sourceSpec);
     response.writeHead(200, {
       'Content-Type': 'application/pdf',
       'Content-Disposition': `inline; filename="${sourceId}.pdf"`,
@@ -553,6 +818,19 @@ createServer(async (request, response) => {
     } catch (error) {
       response.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+  if (pathname === '/api/source/resolve') {
+    try {
+      const sourceId = searchParams.get('id') || '';
+      if (!/^[A-Za-z0-9:._-]{1,160}$/.test(sourceId)) throw new Error('A valid bibliography key is required.');
+      const result = await resolveOpenAccessSource(sourceId);
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify(result));
+    } catch (error) {
+      response.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify({ status: 'error', error: error.message }));
     }
     return;
   }

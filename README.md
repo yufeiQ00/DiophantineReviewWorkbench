@@ -104,7 +104,10 @@ from the local Sage process; there are no simulated mathematical answers.
 ## Review workflow
 
 1. Select or filter a family.
-2. Read its registry metadata and linked sources.
+2. Read its registry metadata and linked sources. Opening a family
+   automatically runs conservative OpenAlex matches for that family's
+   unresolved bibliography entries. Use the exact-title Google Scholar /
+   Google PDF searches for manual confirmation when no open copy is indexed.
 3. Inspect highlighted locations in the complete matcher, solver, tests,
    documentation, and bibliography files.
 4. Run independent Sage checks and record conclusions in Review notes.
@@ -127,6 +130,31 @@ When the classifier raises `SolverUnavailable`, the Sage pane presents it as
 an expected amber **automatic solver not implemented** result. The workbench
 does not change or suppress unexpected exceptions.
 
+## Open-access source discovery
+
+Source discovery runs for unresolved bibliography entries when their family is
+opened. The server sends each bibliography title from that family to OpenAlex
+and compares returned metadata against the recorded title, year, and first
+author (or an exact DOI, when one is present). A reliable bibliographic match
+adds its DOI or OpenAlex record link. A PDF is embedded only when the match is
+strong and OpenAlex also reports a direct HTTPS open-access location. The match
+explanation is displayed beside the result so the reviewer can verify it.
+
+Google Scholar and Google PDF searches are ordinary exact-title links. The
+workbench does not scrape Google, auto-select a Google result, or treat search
+ranking as bibliographic evidence. These links are the manual fallback for
+older works and books that an open scholarly index cannot resolve safely.
+
+OpenAlex responses are cached only in the running server process. They are not
+written into the classifier checkout or this workbench repository.
+
+Some older author-maintained academic sites expose legitimate papers only over
+HTTP and are absent from OpenAlex. These exceptional links may be recorded in
+`verified-sources.json` after a reviewer checks the PDF title and author. Every
+such file must include a pinned SHA-256 digest. The proxy refuses the preview if
+the downloaded bytes no longer match, so HTTP is never enabled as a general
+discovery or arbitrary-fetch mechanism.
+
 ## Local notes
 
 Review notes are stored directly in browser `localStorage`, keyed by family.
@@ -147,7 +175,13 @@ a security sandbox.
   this is defense in depth, not a multi-user security boundary.
 - Review commands before running them, including commands suggested by an AI.
 
-PDF previews are fetched only from open-access URLs declared in the target
-repository bibliography. Wikipedia cards use Wikipedia's public summary API.
-The web integrations remain separate from the classifier package, preserving
-its no-web-dependencies contract.
+PDF previews are fetched from open-access URLs declared in the target
+repository bibliography or conservatively matched by OpenAlex. The proxy
+accepts public HTTPS hosts, checks every redirect, requires PDF content, and
+limits a preview to 50 MB. A manually verified legacy HTTP source is accepted
+only when it is declared in `verified-sources.json` and its downloaded bytes
+match the pinned SHA-256 digest. Wikipedia cards use Wikipedia's public summary
+API. OpenAlex receives the paper title; year, author, and DOI checks happen
+locally against its response. Google receives a title only after the reviewer
+opens a manual search link. The web integrations remain separate from the
+classifier package, preserving its no-web-dependencies contract.
